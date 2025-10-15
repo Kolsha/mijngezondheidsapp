@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  medical-portal-bot:
+    build: .
+    container_name: medical-portal-bot
+    restart: unless-stopped
+    environment:
+      # Telegram Bot Configuration
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      
+      # Medical Portal Credentials
+      - MEDICAL_PORTAL_EMAIL=${MEDICAL_PORTAL_EMAIL}
+      - MEDICAL_PORTAL_PASSWORD=${MEDICAL_PORTAL_PASSWORD}
+      
+      # Optional Configuration
+      - CHECK_INTERVAL=${CHECK_INTERVAL:-300}
+      
+      # Legacy variables for example_usage.py compatibility
+      - LOGIN=${MEDICAL_PORTAL_EMAIL}
+      - PASSWORD=${MEDICAL_PORTAL_PASSWORD}
+    
+    volumes:
+      # Persist session data and state files
+      - ./data:/app/data
+      - ./medical_portal_session.json:/app/medical_portal_session.json
+      - ./last_message_state.json:/app/last_message_state.json
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: Add a service for running the example usage script
+  medical-portal-example:
+    build: .
+    container_name: medical-portal-example
+    command: ["python", "example_usage.py"]
+    environment:
+      - LOGIN=${MEDICAL_PORTAL_EMAIL}
+      - PASSWORD=${MEDICAL_PORTAL_PASSWORD}
+    volumes:
+      - ./data:/app/data
+      - ./medical_portal_session.json:/app/medical_portal_session.json
+    profiles:
+      - example
+    stdin_open: true
+    tty: true

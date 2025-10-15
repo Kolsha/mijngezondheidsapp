@@ -16,15 +16,24 @@ import requests
 import json
 import os
 import logging
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Union
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 import time
 from datetime import datetime, timedelta
 import urllib3
+from dataclasses import dataclass
 
 # Suppress SSL warnings for testing
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+@dataclass
+class TwoFactorAuthData:
+    """Data class to hold 2FA authentication state."""
+    form_data: Dict[str, str]
+    sms_url: str
+    timestamp: datetime
 
 
 class MedicalPortalClient:
@@ -72,6 +81,7 @@ class MedicalPortalClient:
     def _load_session(self) -> None:
         """Load session data from file if it exists."""
         if os.path.exists(self.session_file):
+            self.logger.info(f"Loading session from {self.session_file}")
             try:
                 with open(self.session_file, 'r') as f:
                     session_data = json.load(f)
@@ -142,19 +152,18 @@ class MedicalPortalClient:
         
         return form_data
     
-    def authenticate(self, email: str, password: str, sms_code_provider: Optional[callable] = None) -> bool:
+    def begin_authentication(self, email: str, password: str) -> Union[bool, TwoFactorAuthData]:
         """
-        Authenticate with the medical portal.
+        Begin authentication with the medical portal.
         
         Args:
             email: User's email address
             password: User's password
-            sms_code_provider: Optional callable that returns SMS verification code when 2FA is required.
-                             Should be a function that takes no arguments and returns a string.
-                             Example: lambda: input("Enter SMS code: ")
             
         Returns:
-            True if authentication successful, False otherwise
+            True if authentication successful (no 2FA required)
+            False if authentication failed (invalid credentials)
+            TwoFactorAuthData if 2FA is required
         """
         try:
             # First, get the login page to extract form data
@@ -165,7 +174,7 @@ class MedicalPortalClient:
             # Extract form data including CSRF tokens
             form_data = self._get_form_data(response.text)
 
-            print(form_data)
+            # print(form_data)
             # Add login credentials
             form_data.update({
                 'name': email,
@@ -180,44 +189,18 @@ class MedicalPortalClient:
             if '/login/sms' in response.url:
                 self.logger.info("2FA required - redirected to SMS verification page")
                 
-                if not sms_code_provider:
-                    self.logger.error("SMS code provider required for 2FA but not provided")
-                    return False
-                
-                # Get SMS code from provider
-                try:
-                    sms_code = sms_code_provider()
-                    if not sms_code:
-                        self.logger.error("SMS code is empty")
-                        return False
-                except Exception as e:
-                    self.logger.error(f"Error getting SMS code: {e}")
-                    return False
-                
                 # Extract form data from SMS page
-                form_data = self._get_form_data(response.text)
-                print(form_data)
+                sms_form_data = self._get_form_data(response.text)
+                # print(sms_form_data)
                 
-                # Add SMS code
-                form_data.update({
-                    'sms': sms_code
-                })
+                # Create 2FA data object
+                twofa_data = TwoFactorAuthData(
+                    form_data=sms_form_data,
+                    sms_url=f"{self.base_url}/en/login/sms",
+                    timestamp=datetime.now()
+                )
                 
-                # Submit SMS verification
-                sms_url = f"{self.base_url}/en/login/sms"
-                response = self.session.post(sms_url, data=form_data, allow_redirects=True)
-                print(response.text)
-                response.raise_for_status()
-                
-                # Check if SMS verification was successful
-                if '/login' in response.url and '/sms' not in response.url:
-                    self.logger.error("SMS verification failed - redirected back to login")
-                    return False
-                
-                # Check for success indicators
-                if 'Sign in' in response.text and 'Enter your email address' in response.text:
-                    self.logger.error("SMS verification failed - still on login page")
-                    return False
+                return twofa_data
             
             # Check if login was successful by looking for redirect to login page
             elif '/login' in response.url:
@@ -239,6 +222,50 @@ class MedicalPortalClient:
             return False
         except Exception as e:
             self.logger.error(f"Unexpected error during authentication: {e}")
+            return False
+    
+    def complete_two_factor_auth(self, twofa_data: TwoFactorAuthData, sms_code: str) -> bool:
+        """
+        Complete two-factor authentication with SMS code.
+        
+        Args:
+            twofa_data: TwoFactorAuthData object from begin_authentication()
+            sms_code: SMS verification code
+            
+        Returns:
+            True if 2FA successful, False otherwise
+        """
+        try:
+            # Add SMS code to form data
+            form_data = twofa_data.form_data.copy()
+            form_data.update({
+                'sms': sms_code
+            })
+            
+            # Submit SMS verification
+            response = self.session.post(twofa_data.sms_url, data=form_data, allow_redirects=True)
+            response.raise_for_status()
+            
+            # Check if SMS verification was successful
+            if '/login' in response.url and '/sms' not in response.url:
+                self.logger.error("SMS verification failed - redirected back to login")
+                return False
+            
+            # Check for success indicators
+            if 'Sign in' in response.text and 'Enter your email address' in response.text:
+                self.logger.error("SMS verification failed - still on login page")
+                return False
+            
+            self.is_authenticated = True
+            self._save_session()
+            self.logger.info("2FA authentication successful")
+            return True
+            
+        except requests.RequestException as e:
+            self.logger.error(f"2FA authentication failed: {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Unexpected error during 2FA authentication: {e}")
             return False
     
     def list_messages(self, folder: str = 'inbox') -> List[Dict[str, Any]]:
@@ -271,8 +298,14 @@ class MedicalPortalClient:
                 self.logger.warning(f"Folder '{folder}' not found")
                 return []
             
+            # Look for the button-list div within the folder
+            button_list = folder_div.find('div', class_='button-list')
+            if not button_list:
+                self.logger.warning(f"Button list not found in folder '{folder}'")
+                return []
+            
             # Look for message links in the button-list
-            message_links = folder_div.find_all('a', href=True)
+            message_links = button_list.find_all('a', href=True)
             
             for link in message_links:
                 # Extract message details from the link
@@ -282,7 +315,8 @@ class MedicalPortalClient:
                     'time': None,
                     'url': None,
                     'id': None,
-                    'subject': None
+                    'subject': None,
+                    'answered': None
                 }
                 
                 # Extract URL and ID from href
@@ -301,6 +335,11 @@ class MedicalPortalClient:
                 if strong_elem:
                     message['subject'] = strong_elem.get_text(strip=True)
                 
+                # Extract answered status from data-reaction attribute
+                data_reaction = link.get('data-reaction')
+                if data_reaction is not None:
+                    message['answered'] = data_reaction.lower() == 'true'
+                
                 # Extract timestamp
                 span_elem = link.find('span')
                 if span_elem:
@@ -309,9 +348,21 @@ class MedicalPortalClient:
                     if timestamp_text:
                         parts = timestamp_text.split()
                         if len(parts) >= 2:
-                            message['date'] = parts[0] + ' ' + parts[1]  # e.g., "27 August 2025"
-                            if len(parts) >= 3:
-                                message['time'] = parts[2]  # e.g., "18:13"
+                            if parts[0].lower() == 'today':
+                                # Handle "Today" case
+                                message['date'] = 'Today'
+                                if len(parts) >= 2:
+                                    message['time'] = parts[1]
+                            else:
+                                # Handle regular date format like "3 October 2025 15:56"
+                                if len(parts) >= 4:
+                                    # Format: "3 October 2025 15:56"
+                                    message['date'] = parts[0] + ' ' + parts[1] + ' ' + parts[2]  # "3 October 2025"
+                                    message['time'] = parts[3]  # "15:56"
+                                elif len(parts) >= 3:
+                                    # Format: "3 October 15:56" (no year)
+                                    message['date'] = parts[0] + ' ' + parts[1]  # "3 October"
+                                    message['time'] = parts[2]  # "15:56"
                 
                 messages.append(message)
             
@@ -546,7 +597,7 @@ class MedicalPortalClient:
             settings_url = f"{self.base_url}/en/my-settings"
             response = self.session.get(settings_url)
             response.raise_for_status()
-            print(response.text)
+            # print(response.text)
             
             soup = BeautifulSoup(response.text, 'html.parser')
             patient_info = {}

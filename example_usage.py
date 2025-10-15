@@ -52,16 +52,24 @@ def main():
         # Authenticate with 2FA support
         print("Authenticating...")
         
-        # Define SMS code provider function
-        def get_sms_code():
-            print("2FA required - SMS verification needed")
-            return input("Enter SMS verification code: ").strip()
+        # Begin authentication
+        auth_result = client.begin_authentication(email, password)
         
-        if client.authenticate(email, password, get_sms_code):
+        if auth_result is True:
             print("✓ Authentication successful")
-        else:
+        elif auth_result is False:
             print("✗ Authentication failed")
             return
+        else:
+            # 2FA required
+            print("📱 2FA required - SMS verification needed")
+            sms_code = input("Enter SMS verification code: ").strip()
+            
+            if client.complete_two_factor_auth(auth_result, sms_code):
+                print("✓ 2FA successful - Authentication completed")
+            else:
+                print("✗ 2FA failed")
+                return
     
     print("\n" + "=" * 40)
     print("Available actions:")
