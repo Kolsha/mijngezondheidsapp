@@ -152,6 +152,50 @@ class MedicalPortalClient:
         
         return form_data
     
+    def _parse_error_messages(self, html_content: str) -> List[str]:
+        """
+        Parse error messages from HTML content.
+        
+        Args:
+            html_content: HTML content to parse for errors
+            
+        Returns:
+            List of error messages found in the HTML
+        """
+        soup = BeautifulSoup(html_content, 'html.parser')
+        errors = []
+        
+        # Look for error divs with class="error"
+        error_divs = soup.find_all('div', class_='error')
+        for error_div in error_divs:
+            error_text = error_div.get_text(strip=True)
+            if error_text:
+                errors.append(error_text)
+        
+        # Look for error divs with id containing "error"
+        error_divs_by_id = soup.find_all('div', id=lambda x: x and 'error' in x.lower())
+        for error_div in error_divs_by_id:
+            error_text = error_div.get_text(strip=True)
+            if error_text and error_text not in errors:  # Avoid duplicates
+                errors.append(error_text)
+        
+        # Look for other common error patterns
+        # Check for alert messages
+        alert_divs = soup.find_all('div', class_=lambda x: x and 'alert' in x.lower())
+        for alert_div in alert_divs:
+            alert_text = alert_div.get_text(strip=True)
+            if alert_text and 'error' in alert_text.lower() and alert_text not in errors:
+                errors.append(alert_text)
+        
+        # Check for validation errors
+        validation_errors = soup.find_all('span', class_=lambda x: x and 'error' in x.lower())
+        for validation_error in validation_errors:
+            error_text = validation_error.get_text(strip=True)
+            if error_text and error_text not in errors:
+                errors.append(error_text)
+        
+        return errors
+    
     def begin_authentication(self, email: str, password: str) -> Union[bool, TwoFactorAuthData]:
         """
         Begin authentication with the medical portal.
@@ -208,8 +252,14 @@ class MedicalPortalClient:
                 return False
             
             # Check for success indicators in the response
-            if 'Sign in' in response.text and 'Enter your email address' in response.text:
+            if '/login' in response.url or ('Sign in' in response.text and 'Enter your email address' in response.text):
                 self.logger.error("Authentication failed - still on login page")
+                
+                # Parse and log specific error messages
+                error_messages = self._parse_error_messages(response.text) or []
+                for error in error_messages:
+                    self.logger.error(f"Error: {error}")
+                
                 return False
             
             self.is_authenticated = True
