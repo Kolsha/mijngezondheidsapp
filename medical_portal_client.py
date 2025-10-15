@@ -45,7 +45,7 @@ class MedicalPortalClient:
     """
     
     def __init__(self, base_url: str = "https://huisartsenpraktijk-oostenburg.app.tetra.nl", 
-                 session_file: str = "medical_portal_session.json"):
+                 session_file: str = "/app/data/medical_portal_session.json"):
         """
         Initialize the medical portal client.
         

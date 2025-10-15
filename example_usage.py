@@ -27,8 +27,8 @@ def main():
     print("=" * 40)
     
     # Initialize the client
-    email = os.getenv('LOGIN')
-    password = os.getenv('PASSWORD')
+    email = os.getenv('MEDICAL_PORTAL_EMAIL')
+    password = os.getenv('MEDICAL_PORTAL_PASSWORD')
     
     client = MedicalPortalClient()
     

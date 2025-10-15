@@ -24,8 +24,6 @@ services:
     volumes:
       # Persist session data and state files
       - ./data:/app/data
-      - ./medical_portal_session.json:/app/medical_portal_session.json
-      - ./last_message_state.json:/app/last_message_state.json
     
     # Health check
     healthcheck:
@@ -41,19 +39,3 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-  # Optional: Add a service for running the example usage script
-  medical-portal-example:
-    build: .
-    container_name: medical-portal-example
-    command: ["python", "example_usage.py"]
-    environment:
-      - LOGIN=${MEDICAL_PORTAL_EMAIL}
-      - PASSWORD=${MEDICAL_PORTAL_PASSWORD}
-    volumes:
-      - ./data:/app/data
-      - ./medical_portal_session.json:/app/medical_portal_session.json
-    profiles:
-      - example
-    stdin_open: true
-    tty: true

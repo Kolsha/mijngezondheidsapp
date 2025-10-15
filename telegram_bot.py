@@ -64,12 +64,15 @@ class TelegramMedicalBot:
         if not all([self.bot_token, self.chat_id, self.medical_email, self.medical_password]):
             raise ValueError("Missing required environment variables. Check .env file.")
         
+        # Convert chat_id to string for consistent comparison
+        self.authorized_chat_id = str(self.chat_id)
+        
         # Initialize medical portal client
         self.medical_client = MedicalPortalClient()
         self.executor = ThreadPoolExecutor(max_workers=2)
         
         # State management
-        self.last_message_state_file = 'last_message_state.json'
+        self.last_message_state_file = '/app/data/last_message_state.json'
         self.is_authenticated = False
         self.message_checker_running = False
         
@@ -102,6 +105,16 @@ class TelegramMedicalBot:
                 json.dump(data, f, indent=2)
         except Exception as e:
             logger.error(f"Failed to save last message state: {e}")
+    
+    def _is_authorized_chat(self, update: Update) -> bool:
+        """Check if the message is from an authorized chat."""
+        chat_id = str(update.effective_chat.id)
+        is_authorized = chat_id == self.authorized_chat_id
+        
+        if not is_authorized:
+            logger.warning(f"Unauthorized access attempt from chat ID: {chat_id} (authorized: {self.authorized_chat_id})")
+        
+        return is_authorized
     
     def _setup_handlers(self) -> None:
         """Setup all command and callback handlers."""
@@ -141,6 +154,9 @@ class TelegramMedicalBot:
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""
+        if not self._is_authorized_chat(update):
+            return
+        
         welcome_text = """
 🏥 *Medical Portal Bot*
 
@@ -163,6 +179,9 @@ The bot will automatically check for new messages every 5 minutes and notify you
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /help command."""
+        if not self._is_authorized_chat(update):
+            return
+        
         help_text = """
 *Medical Portal Bot Commands:*
 
@@ -183,6 +202,9 @@ The bot will automatically check for new messages every 5 minutes and notify you
     
     async def messages_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /messages command - show inbox messages with inline buttons."""
+        if not self._is_authorized_chat(update):
+            return
+        
         await update.message.reply_text("📋 Fetching your messages...")
         
         try:
@@ -223,6 +245,9 @@ The bot will automatically check for new messages every 5 minutes and notify you
     
     async def ask_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /ask command - submit question to doctor."""
+        if not self._is_authorized_chat(update):
+            return
+        
         if not context.args:
             await update.message.reply_text(
                 "❌ Please provide a question. Usage: /ask <your question>"
@@ -266,6 +291,9 @@ The bot will automatically check for new messages every 5 minutes and notify you
     
     async def start_auth(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Start authentication process."""
+        if not self._is_authorized_chat(update):
+            return ConversationHandler.END
+        
         await update.message.reply_text("🔐 Starting authentication...")
         
         try:
@@ -295,6 +323,9 @@ The bot will automatically check for new messages every 5 minutes and notify you
     
     async def handle_sms_code(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Handle SMS code input for 2FA."""
+        if not self._is_authorized_chat(update):
+            return ConversationHandler.END
+        
         sms_code = update.message.text.strip()
         logger.info(f"Received SMS code for 2FA from user {update.effective_user.id}")
         
@@ -331,11 +362,17 @@ The bot will automatically check for new messages every 5 minutes and notify you
     
     async def cancel_auth(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Cancel authentication process."""
+        if not self._is_authorized_chat(update):
+            return ConversationHandler.END
+        
         await update.message.reply_text("❌ Authentication cancelled.")
         return ConversationHandler.END
     
     async def handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle callback queries from inline buttons."""
+        if not self._is_authorized_chat(update):
+            return
+        
         query = update.callback_query
         await query.answer()
         
