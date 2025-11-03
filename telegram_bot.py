@@ -59,7 +59,7 @@ class TelegramMedicalBot:
         self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
         self.medical_email = os.getenv('MEDICAL_PORTAL_EMAIL')
         self.medical_password = os.getenv('MEDICAL_PORTAL_PASSWORD')
-        self.check_interval = int(os.getenv('CHECK_INTERVAL', '300'))  # 5 minutes default
+        self.check_interval = int(os.getenv('CHECK_INTERVAL', '120'))  # 2 minutes default
         
         if not all([self.bot_token, self.chat_id, self.medical_email, self.medical_password]):
             raise ValueError("Missing required environment variables. Check .env file.")
